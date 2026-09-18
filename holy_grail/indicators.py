@@ -129,10 +129,17 @@ def macd(close: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
     return macd_line, signal_line, hist
 
 
-def stochastic(close: pd.Series, high: pd.Series, low: pd.Series, length: int = 14, smooth_d: int = 3):
+def stochastic(close: pd.Series, high: pd.Series, low: pd.Series, length: int = 14, smooth_d: int = 3, smooth_k: int = 1):
+    """
+    Matches Pine v9.6's two-stage smoothing:
+        stochRaw = ta.stoch(close, high, low, length)
+        stochK   = ta.sma(stochRaw, smooth_k)   # smooth_k=1 is a no-op (v9.4 behavior)
+        stochD   = ta.sma(stochK, smooth_d)
+    """
     lowest_low = low.rolling(length, min_periods=length).min()
     highest_high = high.rolling(length, min_periods=length).max()
-    k = 100.0 * (close - lowest_low) / (highest_high - lowest_low).replace(0.0, np.nan)
+    raw = 100.0 * (close - lowest_low) / (highest_high - lowest_low).replace(0.0, np.nan)
+    k = sma(raw, smooth_k)
     d = sma(k, smooth_d)
     return k, d
 
@@ -216,3 +223,20 @@ def crossunder(a: pd.Series, b) -> pd.Series:
     """Pine ta.crossunder(a, b): a[1] > b[1] and a < b (strict both sides)."""
     b = b if isinstance(b, pd.Series) else pd.Series(b, index=a.index)
     return (a < b) & (a.shift(1) > b.shift(1))
+
+
+def bars_since(cond: pd.Series, sentinel: int = 9999) -> np.ndarray:
+    """
+    Pine ta.barssince(cond), with Pine's nz(..., sentinel) applied for bars
+    before the condition has ever been true (ta.barssince is na there).
+    On the bar cond is true, this returns 0 (matches Pine).
+    """
+    arr = cond.to_numpy(dtype=bool)
+    out = np.full(arr.shape, sentinel, dtype=np.int64)
+    last_true = -1
+    for i in range(len(arr)):
+        if arr[i]:
+            last_true = i
+        if last_true >= 0:
+            out[i] = i - last_true
+    return out

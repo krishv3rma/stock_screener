@@ -1,9 +1,25 @@
 # Holy Grail Screener/Signal System
 
 Python port of the "Holy Grail — Daily Trend Edition" TradingView Pine Script
-indicator, combined with a Finviz-style screener, for free daily signal
-scanning and backtesting. See `.claude/plans` (or ask Claude) for the full
-project plan.
+indicator (currently tracking **v9.6**), combined with a Finviz-style
+screener, for free daily signal scanning and backtesting. See
+`.claude/plans` (or ask Claude) for the full project plan.
+
+## Indicator version: v9.6
+
+v9.6 added an **entry confirmation stack** on top of v9.4/v9.5's signal
+sources — Stochastic/RSI/MACD agreement plus a stochastic exhaustion veto,
+controlled by one `strictness` setting (`loose` / `balanced` / `strict` /
+`custom`, default **`balanced`**). It gates NEW ENTRIES ONLY; every exit,
+stop, trail, break-even latch, and chandelier ratchet is byte-for-byte
+unchanged from v9.4. See `HolyGrailParams` in `holy_grail/engine.py` for
+every field, and `_resolve_strictness()` for exactly what each preset
+resolves to.
+
+Note: `use_adx_filter` defaults to `True` here, which is *not* the Pine
+default (`False`) — that's a deliberate tuning choice from backtesting for
+this project's multi-week swing-trading goal, not part of the v9.6 port
+itself. See git history for the backtest evidence.
 
 ## Setup
 
@@ -86,7 +102,7 @@ cd docs && "../.venv/Scripts/python.exe" -m http.server 8000
 - [x] Stage E — dashboard (`docs/index.html`, static, no build step)
 - [x] Stage F — public GitHub repo + Pages hosting (source runs locally, on demand)
 
-Live dashboard: https://whaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.github.io/stock_screener/
+Live dashboard: https://krishv3rma.github.io/stock_screener/
 
 ## Known approximations vs. the live Pine script
 
@@ -98,3 +114,7 @@ Live dashboard: https://whaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.github.io/stock_screen
   TradingView for tickers with a normal Mon-Fri trading week.
 - Divergence pivot detection and R-multiple/stop mechanics are ported
   1:1 from the script's own logic and priority order.
+- v9.6's entry confirmation stack (stoch/RSI/MACD agreement + exhaustion
+  veto) is ported 1:1 including all three strictness presets; the
+  `pendingLong`/`pendingShort` "blocked setup" markers are dashboard/alert
+  cosmetics in Pine with no effect on trading logic, so they're not ported.

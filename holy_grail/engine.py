@@ -32,6 +32,17 @@ class HolyGrailParams:
     cooldown_bars: int = 4
     grace_len: int = 2
 
+    # Oscillator Engine (v9.6) - configurable, but defaults reproduce the
+    # v9.4 hardcoded values exactly (stoch_smooth_k=1 is a no-op SMA).
+    macd_fast_len: int = 12
+    macd_slow_len: int = 26
+    macd_sig_len: int = 9
+    stoch_len: int = 14
+    stoch_smooth_k: int = 1
+    stoch_d_len: int = 3
+    stoch_ob_lvl: float = 80
+    stoch_os_lvl: float = 20
+
     # Signal Sources
     use_ema_cross: bool = False
     use_mom_break: bool = True
@@ -57,6 +68,36 @@ class HolyGrailParams:
     sqz_vol_mult: float = 2.0
     allow_reversal_bars: int = 3
     allow_rev_no_weekly: bool = True
+
+    # Entry Confirmation Stack (v9.6, ADD-5/CHG-5/CHG-6). Gates NEW ENTRIES
+    # ONLY - exits/stops/trails never touch this. "balanced" is the Pine
+    # default and what actually runs unless the indicator is set otherwise.
+    #   loose    - stack off entirely (v9.4 entry behaviour)
+    #   balanced - all 3 confirmations active, ANY 2 of 3 must pass
+    #   strict   - all 3 must pass, MACD must be a fresh cross (<=10 bars)
+    #   custom   - every use_*_confirm / *_mode / *_lookback field below is
+    #              honoured exactly as set
+    strictness: str = "balanced"  # "loose" | "balanced" | "strict" | "custom"
+
+    use_confirm_stack: bool = True
+    confirm_logic: str = "at_least_n"  # "all" | "at_least_n"
+    confirm_min_count: int = 2
+    apply_confirm_to_rev: bool = True
+
+    use_stoch_confirm: bool = True
+    stoch_confirm_mode: str = "k_vs_d"  # "k_vs_d" | "fresh_cross" | "reclaim"
+    stoch_lookback: int = 3
+
+    use_rsi_confirm: bool = True
+    rsi_confirm_mode: str = "midline"  # "avoid_extremes" | "midline" | "reclaim"
+    rsi_midline: float = 50
+    rsi_lookback: int = 5
+
+    use_macd_confirm: bool = True
+    macd_confirm_mode: str = "line_vs_signal"  # "line_vs_signal" | "hist_sign" | "fresh_cross"
+    macd_lookback: int = 10
+
+    veto_mode: str = "extreme_rolling_over"  # "off" | "extreme_only" | "extreme_rolling_over"
 
     # Continuation Settings
     cont_mom_bars: int = 3
@@ -94,6 +135,49 @@ class HolyGrailParams:
 _NA = float("nan")
 
 
+@dataclass
+class _EffectiveStrictness:
+    """Resolved (e_*) confirmation-stack settings, per Pine's CHG-5 table."""
+    use_stack: bool
+    logic: str
+    min_count: int
+    apply_to_rev: bool
+    stoch_on: bool
+    stoch_mode: str
+    stoch_lb: int
+    rsi_on: bool
+    rsi_mode: str
+    rsi_mid: float
+    rsi_lb: int
+    macd_on: bool
+    macd_mode: str
+    macd_lb: int
+    veto_mode: str
+
+
+def _resolve_strictness(p: "HolyGrailParams") -> _EffectiveStrictness:
+    is_custom = p.strictness == "custom"
+    is_loose = p.strictness == "loose"
+    is_strict = p.strictness == "strict"
+    return _EffectiveStrictness(
+        use_stack=p.use_confirm_stack if is_custom else not is_loose,
+        logic=p.confirm_logic if is_custom else ("all" if is_strict else "at_least_n"),
+        min_count=p.confirm_min_count if is_custom else 2,
+        apply_to_rev=p.apply_confirm_to_rev if is_custom else not is_loose,
+        stoch_on=p.use_stoch_confirm if is_custom else True,
+        stoch_mode=p.stoch_confirm_mode if is_custom else "k_vs_d",
+        stoch_lb=p.stoch_lookback if is_custom else 3,
+        rsi_on=p.use_rsi_confirm if is_custom else True,
+        rsi_mode=p.rsi_confirm_mode if is_custom else "midline",
+        rsi_mid=p.rsi_midline if is_custom else 50,
+        rsi_lb=p.rsi_lookback if is_custom else 5,
+        macd_on=p.use_macd_confirm if is_custom else True,
+        macd_mode=p.macd_confirm_mode if is_custom else ("fresh_cross" if is_strict else "line_vs_signal"),
+        macd_lb=p.macd_lookback if is_custom else 10,
+        veto_mode=p.veto_mode if is_custom else ("off" if is_loose else "extreme_rolling_over"),
+    )
+
+
 def _isnan(x) -> bool:
     return x is None or (isinstance(x, float) and math.isnan(x))
 
@@ -121,8 +205,8 @@ class HolyGrailEngine:
         ema200 = ta.ema(c, 200)
         atr = ta.atr(h, l, c, p.atr_len)
         rsi = ta.rsi(c, p.rsi_len)
-        macd_line, macd_sig, macd_hist = ta.macd(c)
-        stoch_k, stoch_d = ta.stochastic(c, h, l, 14, 3)
+        macd_line, macd_sig, macd_hist = ta.macd(c, p.macd_fast_len, p.macd_slow_len, p.macd_sig_len)
+        stoch_k, stoch_d = ta.stochastic(c, h, l, p.stoch_len, p.stoch_d_len, p.stoch_smooth_k)
         bb_basis, bb_upper, bb_lower = ta.bollinger(c, 20, 2.0)
         is_squeeze = (bb_upper - bb_lower) < atr * 2.5
         sqz_dir = ta.linreg(c - (bb_upper + bb_lower) / 2.0, 14, 0)
@@ -226,6 +310,86 @@ class HolyGrailEngine:
         stoch_cross_under = ta.crossunder(stoch_k, stoch_d)
         stoch_cross_over = ta.crossover(stoch_k, stoch_d)
 
+        # ------------------------------------------------------------------
+        # Entry Confirmation Stack (v9.6, ADD-5/CHG-5/CHG-6) - resolved once
+        # from the strictness preset, evaluated vectorized since none of it
+        # depends on trade state. Gates NEW ENTRIES ONLY.
+        # ------------------------------------------------------------------
+        e = _resolve_strictness(p)
+
+        bars_since_macd_up = ta.bars_since(macd_cross_over)
+        bars_since_macd_dn = ta.bars_since(macd_cross_under)
+        bars_since_stoch_up = ta.bars_since(stoch_cross_over)
+        bars_since_stoch_dn = ta.bars_since(stoch_cross_under)
+        bars_since_stoch_leave_os = ta.bars_since(ta.crossover(stoch_k, p.stoch_os_lvl))
+        bars_since_stoch_leave_ob = ta.bars_since(ta.crossunder(stoch_k, p.stoch_ob_lvl))
+        bars_since_rsi_leave_os = ta.bars_since(ta.crossover(rsi, p.rsi_os))
+        bars_since_rsi_leave_ob = ta.bars_since(ta.crossunder(rsi, p.rsi_ob))
+
+        stoch_k_a0, stoch_d_a0 = stoch_k.to_numpy(dtype=float), stoch_d.to_numpy(dtype=float)
+        if e.stoch_mode == "k_vs_d":
+            stoch_pass_long = stoch_k_a0 > stoch_d_a0
+            stoch_pass_short = stoch_k_a0 < stoch_d_a0
+        elif e.stoch_mode == "fresh_cross":
+            stoch_pass_long = bars_since_stoch_up <= e.stoch_lb
+            stoch_pass_short = bars_since_stoch_dn <= e.stoch_lb
+        else:  # "reclaim"
+            stoch_pass_long = (bars_since_stoch_leave_os <= e.stoch_lb) & (stoch_k_a0 > stoch_d_a0)
+            stoch_pass_short = (bars_since_stoch_leave_ob <= e.stoch_lb) & (stoch_k_a0 < stoch_d_a0)
+
+        rsi_a0 = rsi.to_numpy(dtype=float)
+        if e.rsi_mode == "avoid_extremes":
+            rsi_pass_long = rsi_a0 < p.rsi_ob
+            rsi_pass_short = rsi_a0 > p.rsi_os
+        elif e.rsi_mode == "midline":
+            rsi_pass_long = rsi_a0 > e.rsi_mid
+            rsi_pass_short = rsi_a0 < e.rsi_mid
+        else:  # "reclaim" - no stoch dependency in Pine's rsiPassLong/Short
+            rsi_pass_long = bars_since_rsi_leave_os <= e.rsi_lb
+            rsi_pass_short = bars_since_rsi_leave_ob <= e.rsi_lb
+
+        macd_line_a0, macd_sig_a0 = macd_line.to_numpy(dtype=float), macd_sig.to_numpy(dtype=float)
+        macd_hist_a0 = macd_hist.to_numpy(dtype=float)
+        if e.macd_mode == "line_vs_signal":
+            macd_pass_long = macd_line_a0 > macd_sig_a0
+            macd_pass_short = macd_line_a0 < macd_sig_a0
+        elif e.macd_mode == "hist_sign":
+            macd_pass_long = macd_hist_a0 > 0
+            macd_pass_short = macd_hist_a0 < 0
+        else:  # "fresh_cross"
+            macd_pass_long = bars_since_macd_up <= e.macd_lb
+            macd_pass_short = bars_since_macd_dn <= e.macd_lb
+
+        confirm_active = int(e.stoch_on) + int(e.rsi_on) + int(e.macd_on)
+        long_pass_count = (
+            (stoch_pass_long.astype(int) if e.stoch_on else 0)
+            + (rsi_pass_long.astype(int) if e.rsi_on else 0)
+            + (macd_pass_long.astype(int) if e.macd_on else 0)
+        )
+        short_pass_count = (
+            (stoch_pass_short.astype(int) if e.stoch_on else 0)
+            + (rsi_pass_short.astype(int) if e.rsi_on else 0)
+            + (macd_pass_short.astype(int) if e.macd_on else 0)
+        )
+        confirm_need = confirm_active if e.logic == "all" else min(e.min_count, confirm_active)
+
+        if e.veto_mode == "off":
+            stoch_veto_long = np.zeros(n, dtype=bool)
+            stoch_veto_short = np.zeros(n, dtype=bool)
+        elif e.veto_mode == "extreme_only":
+            stoch_veto_long = stoch_k_a0 > p.stoch_ob_lvl
+            stoch_veto_short = stoch_k_a0 < p.stoch_os_lvl
+        else:  # "extreme_rolling_over"
+            stoch_veto_long = (stoch_k_a0 > p.stoch_ob_lvl) & (stoch_k_a0 < stoch_d_a0)
+            stoch_veto_short = (stoch_k_a0 < p.stoch_os_lvl) & (stoch_k_a0 > stoch_d_a0)
+
+        if e.use_stack:
+            confirm_long = (long_pass_count >= confirm_need) & ~stoch_veto_long
+            confirm_short = (short_pass_count >= confirm_need) & ~stoch_veto_short
+        else:
+            confirm_long = np.ones(n, dtype=bool)
+            confirm_short = np.ones(n, dtype=bool)
+
         # divergence pivots (confirmation-lagged, spacing-capped) — precompute
         # the raw pivot points; the running ph1/ph2/pl1/pl2 bookkeeping is
         # inherently sequential and handled in the pre-pass loop below.
@@ -262,6 +426,10 @@ class HolyGrailEngine:
                 "is_squeeze": is_squeeze,
             }.items()
         }
+        # already plain numpy bool arrays (computed from other numpy arrays
+        # above, not pandas Series), so no .fillna()/.to_numpy() needed
+        bools["confirm_long"] = confirm_long
+        bools["confirm_short"] = confirm_short
         ph_price_arr = ph_price.to_numpy(dtype=float)
         pl_price_arr = pl_price.to_numpy(dtype=float)
         rsi_at_pivot_arr = rsi_at_pivot_confirm.to_numpy(dtype=float)
@@ -547,19 +715,28 @@ class HolyGrailEngine:
             weekly_ok_long = bools["weekly_bull"][i] or (p.allow_rev_no_weekly and in_rev_window and last_exit_dir == -1)
             weekly_ok_short = bools["weekly_bear"][i] or (p.allow_rev_no_weekly and in_rev_window and last_exit_dir == 1)
             adx_ok_i = bools["adx_ok"][i]
+            confirm_long_i = bools["confirm_long"][i]
+            confirm_short_i = bools["confirm_short"][i]
 
-            raw_long = (std_long or brk_long_full or cont_long) and weekly_ok_long and long_ready and adx_ok_i
-            raw_short = (std_short or brk_short_full or cont_short) and weekly_ok_short and short_ready and adx_ok_i
+            setup_long = std_long or brk_long_full or cont_long
+            setup_short = std_short or brk_short_full or cont_short
+
+            # v9.6: the confirmation stack gates NEW entries only (raw_long/
+            # raw_short), same as Pine's rawLong = rawLongPre and confirmLong.
+            raw_long_pre = setup_long and weekly_ok_long and long_ready and adx_ok_i
+            raw_short_pre = setup_short and weekly_ok_short and short_ready and adx_ok_i
+            raw_long = raw_long_pre and confirm_long_i
+            raw_short = raw_short_pre and confirm_short_i
 
             prior_bar_exited = had_exit and last_exit_bar == i - 1
-            reversal_to_long = (
-                prior_bar_exited and last_exit_dir == -1 and (std_long or brk_long_full or cont_long)
-                and weekly_ok_long and adx_ok_i
+            reversal_to_long_pre = (
+                prior_bar_exited and last_exit_dir == -1 and setup_long and weekly_ok_long and adx_ok_i
             )
-            reversal_to_short = (
-                prior_bar_exited and last_exit_dir == 1 and (std_short or brk_short_full or cont_short)
-                and weekly_ok_short and adx_ok_i
+            reversal_to_short_pre = (
+                prior_bar_exited and last_exit_dir == 1 and setup_short and weekly_ok_short and adx_ok_i
             )
+            reversal_to_long = reversal_to_long_pre and (confirm_long_i or not e.apply_to_rev)
+            reversal_to_short = reversal_to_short_pre and (confirm_short_i or not e.apply_to_rev)
 
             long_wants = raw_long or reversal_to_long
             short_wants = raw_short or reversal_to_short
