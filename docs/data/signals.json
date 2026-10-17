@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-17T14:00:21.893324+00:00",
+  "generated_at": "2026-10-17T23:00:32.924902+00:00",
   "universe_size": 117,
   "screener_pass_count": 43,
   "track_record": {
@@ -142,7 +142,7 @@
       "ticker": "AMGN",
       "as_of": "2026-10-16",
       "price": 432.489990234375,
-      "market_cap": 233817930562.84055,
+      "market_cap": 233817930562.8405,
       "avg_volume": 2819711.111111111,
       "relative_volume": 0.9104124141953077,
       "beta": 0.49989155280199515,
