@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-24T14:37:12.127286+00:00",
+  "generated_at": "2026-10-24T23:00:24.510697+00:00",
   "universe_size": 117,
   "screener_pass_count": 48,
   "track_record": {
@@ -1486,7 +1486,7 @@
       "ticker": "BRK-B",
       "as_of": "2026-10-23",
       "price": 542.1900024414062,
-      "market_cap": 1160671448435.2021,
+      "market_cap": 1160671448435.202,
       "avg_volume": 4458420.634920635,
       "relative_volume": 0.9662838822915795,
       "beta": 0.08578975611229438,
