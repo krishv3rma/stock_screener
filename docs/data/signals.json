@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-29T22:53:37.266968+00:00",
+  "generated_at": "2026-10-29T23:00:21.628455+00:00",
   "universe_size": 116,
   "screener_pass_count": 49,
   "track_record": {
@@ -646,7 +646,7 @@
       "ticker": "LIN",
       "as_of": "2026-10-29",
       "price": 503.1499938964844,
-      "market_cap": 234251681318.23975,
+      "market_cap": 234251681318.23972,
       "avg_volume": 2038416.888888889,
       "relative_volume": 1.390816577047373,
       "beta": 0.18007425125635465,
